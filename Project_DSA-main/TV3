@@ -1,0 +1,702 @@
+#include <iostream>
+#include <fstream>
+#include <string>
+#include <cstring>
+#include <windows.h>
+#include <conio.h>
+#include <sstream>
+
+using namespace std;
+
+// ------------------ STRUCTS ------------------
+struct MayBay {
+    string soHieu;
+    int soCho;
+};
+
+struct NodeGhe {
+    int soGhe;
+    NodeGhe* next;
+    NodeGhe(int s = 0) : soGhe(s), next(NULL) {}
+};
+
+struct Ve {
+    string maVe;
+    string maChuyenBay;
+    string cmnd;
+    string hoTen;
+    int soGhe;
+    Ve* next;
+    Ve() : soGhe(0), next(NULL) {}
+};
+
+struct KhachHang {
+    int soThuTu;
+    string cmnd;
+    string hoTen;
+    KhachHang* next;
+    KhachHang() : soThuTu(0), next(NULL) {}
+};
+
+struct ChuyenBay {
+    string maChuyenBay;
+    string soHieuMayBay;
+    string ngayKhoiHanh;
+    string sanBayDen;
+    int trangThai; // 0:huy,1:con ve,2:het ve,3:hoan tat
+    NodeGhe* danhSachGheTrong;
+    Ve* danhSachVe;
+    ChuyenBay() : trangThai(1), danhSachGheTrong(NULL), danhSachVe(NULL) {}
+    ChuyenBay(const ChuyenBay& o) { // copy to support linked list node copying
+        maChuyenBay = o.maChuyenBay;
+        soHieuMayBay = o.soHieuMayBay;
+        ngayKhoiHanh = o.ngayKhoiHanh;
+        sanBayDen = o.sanBayDen;
+        trangThai = o.trangThai;
+        danhSachGheTrong = NULL; // will init separately
+        danhSachVe = NULL;
+    }
+};
+
+// Linked lists heads
+struct NodeMayBay {
+    MayBay data;
+    NodeMayBay* next;
+    NodeMayBay(const MayBay& m) : data(m), next(NULL) {}
+};
+
+struct NodeChuyenBay {
+    ChuyenBay data;
+    NodeChuyenBay* next;
+    NodeChuyenBay(const ChuyenBay& c) : data(c), next(NULL) {}
+};
+
+// Global lists
+NodeMayBay* dsMayBay = NULL;
+NodeChuyenBay* dsChuyenBay = NULL;
+KhachHang* dsKhachHang = NULL;
+
+// ------------------ UTIL / CONSOLE ------------------
+void setColor(int color) {
+    SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), color);
+}
+void xoaManHinh() { system("cls"); }
+void dungManHinh() { cout << "\nNhan ENTER de tiep tuc..."; cin.ignore(); }
+
+// trim helpers
+string trim(const string& s) {
+    size_t a = s.find_first_not_of(" \t\r\n");
+    if (a == string::npos) return "";
+    size_t b = s.find_last_not_of(" \t\r\n");
+    return s.substr(a, b - a + 1);
+}
+bool isBlank(const string& s) { return trim(s).empty(); }
+
+// ------------------ GHE LIST ------------------
+NodeGhe* khoiTaoDanhSachGhe(int soCho) {
+    if (soCho <= 0) return NULL;
+    NodeGhe* head = NULL;
+    for (int i = soCho; i >= 1; --i) { // push front to get ascending order
+        NodeGhe* n = new NodeGhe(i);
+        n->next = head;
+        head = n;
+    }
+    // list currently 1..soCho but in backward insertion order -> fix? Actually above gives 1 at head? Let's ensure ascending.
+    // We inserted from soCho down to 1, so head->soGhe == 1. ok.
+    return head;
+}
+void themGheTrong(NodeGhe*& head, int soGhe) {
+    NodeGhe* newNode = new NodeGhe(soGhe);
+    if (!head || head->soGhe > soGhe) { newNode->next = head; head = newNode; return; }
+    NodeGhe* cur = head;
+    while (cur->next && cur->next->soGhe < soGhe) cur = cur->next;
+    newNode->next = cur->next;
+    cur->next = newNode;
+}
+bool xoaGheTrong(NodeGhe*& head, int soGhe) {
+    if (!head) return false;
+    if (head->soGhe == soGhe) { NodeGhe* tmp = head; head = head->next; delete tmp; return true; }
+    NodeGhe* cur = head;
+    while (cur->next) {
+        if (cur->next->soGhe == soGhe) { NodeGhe* tmp = cur->next; cur->next = tmp->next; delete tmp; return true; }
+        cur = cur->next;
+    }
+    return false;
+}
+int demGheTrong(NodeGhe* head) {
+    int c = 0; while (head) { c++; head = head->next; } return c;
+}
+void giaiPhongDanhSachGhe(NodeGhe*& head) {
+    while (head) { NodeGhe* t = head; head = head->next; delete t; }
+}
+
+// ------------------ VE LIST ------------------
+void themVe(Ve*& head, Ve* v) {
+    v->next = head; head = v;
+}
+bool xoaVe(Ve*& head, const string& maVe) {
+    if (!head) return false;
+    if (head->maVe == maVe) { Ve* t = head; head = head->next; delete t; return true; }
+    Ve* cur = head;
+    while (cur->next) {
+        if (cur->next->maVe == maVe) { Ve* t = cur->next; cur->next = t->next; delete t; return true; }
+        cur = cur->next;
+    }
+    return false;
+}
+Ve* timVeTrongDS(Ve* head, const string& maVe) {
+    Ve* cur = head;
+    while (cur) { if (cur->maVe == maVe) return cur; cur = cur->next; }
+    return NULL;
+}
+
+// ------------------ KHACHHANG LIST ------------------
+void themKhachHang(KhachHang*& head, const string& cmnd, const string& hoTen) {
+    KhachHang* kh = new KhachHang();
+    int maxSTT = 0;
+    for (KhachHang* p = head; p; p = p->next) if (p->soThuTu > maxSTT) maxSTT = p->soThuTu;
+    kh->soThuTu = maxSTT + 1;
+    kh->cmnd = cmnd; kh->hoTen = hoTen;
+    kh->next = head; head = kh;
+}
+bool xoaKhachHang(KhachHang*& head, int stt) {
+    if (!head) return false;
+    if (head->soThuTu == stt) { KhachHang* t = head; head = head->next; delete t; return true; }
+    KhachHang* cur = head;
+    while (cur->next) {
+        if (cur->next->soThuTu == stt) { KhachHang* t = cur->next; cur->next = t->next; delete t; return true; }
+        cur = cur->next;
+    }
+    return false;
+}
+KhachHang* timKhachHangTheoSTT(KhachHang* head, int stt) {
+    KhachHang* cur = head;
+    while (cur) { if (cur->soThuTu == stt) return cur; cur = cur->next; }
+    return NULL;
+}
+
+// ------------------ NODE MAYBAY & CHUYENBAY ------------------
+void themMayBay(NodeMayBay*& head, const MayBay& mb) {
+    NodeMayBay* n = new NodeMayBay(mb);
+    if (!head) { head = n; return; }
+    NodeMayBay* cur = head; while (cur->next) cur = cur->next;
+    cur->next = n;
+}
+MayBay* timMayBay(NodeMayBay* head, const string& soHieu) {
+    NodeMayBay* cur = head;
+    while (cur) { if (cur->data.soHieu == soHieu) return &(cur->data); cur = cur->next; }
+    return NULL;
+}
+bool kiemTraMayBayTonTai(NodeMayBay* head, const string& soHieu) {
+    return timMayBay(head, soHieu) != NULL;
+}
+void themChuyenBay(NodeChuyenBay*& head, const ChuyenBay& cb) {
+    NodeChuyenBay* n = new NodeChuyenBay(cb);
+    if (!head) { head = n; return; }
+    NodeChuyenBay* cur = head; while (cur->next) cur = cur->next;
+    cur->next = n;
+}
+ChuyenBay* timChuyenBay(NodeChuyenBay* head, const string& maCB) {
+    NodeChuyenBay* cur = head;
+    while (cur) {
+        if (cur->data.maChuyenBay == maCB) return &(cur->data);
+        cur = cur->next;
+    }
+    return NULL;
+}
+NodeChuyenBay* timNodeChuyenBay(NodeChuyenBay* head, const string& maCB) {
+    NodeChuyenBay* cur = head;
+    while (cur) { if (cur->data.maChuyenBay == maCB) return cur; cur = cur->next; }
+    return NULL;
+}
+
+// ------------------ FILE IO ------------------
+void ghiFileMayBay(NodeMayBay* head, const char* filename = "MayBay.txt") {
+    ofstream f(filename);
+    if (!f) { cout << "Loi mo file " << filename << endl; return; }
+    NodeMayBay* cur = head;
+    while (cur) {
+        f << cur->data.soHieu << " " << cur->data.soCho << endl;
+        cur = cur->next;
+    }
+    f.close();
+}
+void docFileMayBay(NodeMayBay*& head, const char* filename = "MayBay.txt") {
+    ifstream f(filename);
+    if (!f) return; // file may not exist initially
+    while (!f.eof()) {
+        string soHieu; int soCho;
+        if (!(f >> soHieu >> soCho)) break;
+        MayBay mb; mb.soHieu = soHieu; mb.soCho = soCho;
+        themMayBay(head, mb);
+    }
+    f.close();
+}
+
+// ChuyenBay file format:
+// line1: MA_CHUYEN SOHIEU NGAYKH (no spaces in date)
+// line2: SANBAYDEN (may contain spaces)
+// line3: TRANGTHAI
+void ghiFileChuyenBay(NodeChuyenBay* head, const char* filename = "ChuyenBay.txt") {
+    ofstream f(filename);
+    if (!f) { cout << "Loi mo file " << filename << endl; return; }
+    NodeChuyenBay* cur = head;
+    while (cur) {
+        f << cur->data.maChuyenBay << " " << cur->data.soHieuMayBay << " " << cur->data.ngayKhoiHanh << endl;
+        f << cur->data.sanBayDen << endl;
+        f << cur->data.trangThai << endl;
+        cur = cur->next;
+    }
+    f.close();
+}
+void docFileChuyenBay(NodeChuyenBay*& head, const char* filename = "ChuyenBay.txt") {
+    ifstream f(filename);
+    if (!f) {
+        cout << "Khong mo duoc file: " << filename << endl;
+        return;
+    }
+
+    while (true) {
+        string maCB, soHieu, ngayKH;
+        if (!(f >> maCB >> soHieu >> ngayKH)) break;
+        f.ignore(); // bỏ ký tự xuống dòng sau line 1
+
+        string sanBayDen;
+        getline(f, sanBayDen);
+        int trangThai;
+        f >> trangThai;
+        f.ignore();
+
+        ChuyenBay cb;
+        cb.maChuyenBay = maCB;
+        cb.soHieuMayBay = soHieu;
+        cb.ngayKhoiHanh = ngayKH;
+        cb.sanBayDen = sanBayDen;
+        cb.trangThai = trangThai;
+        cb.danhSachGheTrong = khoiTaoDanhSachGhe(180); // tạm khởi tạo 180 ghế chẳng hạn
+
+        themChuyenBay(head, cb);
+    }
+
+    f.close();
+}
+
+void ghiFileKhachHang(KhachHang* head, const char* filename = "KhachHang.txt") {
+    ofstream f(filename);
+    if (!f) { cout << "Loi mo file KhachHang.txt\n"; return; }
+    KhachHang* cur = head;
+    while (cur) {
+        f << cur->soThuTu << " " << cur->cmnd << " " << cur->hoTen << endl;
+        cur = cur->next;
+    }
+    f.close();
+}
+void docFileKhachHang(KhachHang*& head, const char* filename = "KhachHang.txt") {
+    ifstream f(filename);
+    if (!f) return;
+    while (!f.eof()) {
+        int stt; string cmnd; string hoten;
+        if (!(f >> stt >> cmnd)) break;
+        getline(f, hoten);
+        hoten = trim(hoten);
+        KhachHang* kh = new KhachHang();
+        kh->soThuTu = stt; kh->cmnd = cmnd; kh->hoTen = hoten;
+        kh->next = head; head = kh;
+    }
+    f.close();
+}
+
+// Admin accounts
+bool checkAdmin(const string& user, const string& pass, const char* filename = "Admin.txt") {
+    ifstream f(filename);
+    if (!f) return false;
+    string u, p;
+    while (f >> u >> p) {
+        if (u == user && p == pass) { f.close(); return true; }
+    }
+    f.close();
+    return false;
+}
+
+// ticket file write
+void ghiFileVeRaFile(const Ve& v) {
+    string fname = v.maVe + ".txt";
+    ofstream f(fname);
+    if (!f) { cout << "Loi tao file ve " << fname << endl; return; }
+    f << "Ma ve: " << v.maVe << endl;
+    f << "Ma chuyen bay: " << v.maChuyenBay << endl;
+    f << "CMND: " << v.cmnd << endl;
+    f << "Ho ten: " << v.hoTen << endl;
+    f << "So ghe: " << v.soGhe << endl;
+    f.close();
+}
+void xoaFileVe(const string& maVe) {
+    string fn = maVe + ".txt";
+    remove(fn.c_str());
+}
+
+// ------------------ HIEN THI ------------------
+const char* layTenTrangThai(int tt) {
+    switch (tt) {
+    case 0: return "Huy chuyen";
+    case 1: return "Con ve";
+    case 2: return "Het ve";
+    case 3: return "Hoan tat";
+    default: return "Khong xac dinh";
+    }
+}
+void hienThiDanhSachMayBay(NodeMayBay* head) {
+    xoaManHinh();
+    setColor(14);
+    cout << "*********** DANH SACH MAY BAY ***********\n";
+    setColor(7);
+    if (!head) { cout << "Trong!\n"; return; }
+    cout << "So hieu\tSo cho\n";
+    cout << "-----------------\n";
+    NodeMayBay* cur = head;
+    while (cur) {
+        cout << cur->data.soHieu << "\t" << cur->data.soCho << endl;
+        cur = cur->next;
+    }
+}
+void hienThiDanhSachChuyenBay(NodeChuyenBay* head) {
+    xoaManHinh();
+    setColor(14);
+    cout << "=============== DANH SACH CHUYEN BAY ===============\n";
+    setColor(7);
+    if (!head) { cout << "Trong!\n"; return; }
+    cout << "MaCB\tMayBay\tNgayKH\tSanBayDen\tTrangThai\tGheTrong\n";
+    cout << "---------------------------------------------------------------\n";
+    NodeChuyenBay* cur = head;
+    while (cur) {
+        int soGhe = demGheTrong(cur->data.danhSachGheTrong);
+        cout << cur->data.maChuyenBay << "\t" << cur->data.soHieuMayBay << "\t" << cur->data.ngayKhoiHanh
+            << "\t" << cur->data.sanBayDen << "\t" << layTenTrangThai(cur->data.trangThai) << "\t" << soGhe << endl;
+        cur = cur->next;
+    }
+}
+void hienThiDanhSachKhachHang(KhachHang* head) {
+    xoaManHinh();
+    setColor(14); cout << "===== DANH SACH KHACH HANG CHO =====\n"; setColor(7);
+    if (!head) { cout << "Trong!\n"; return; }
+    cout << "STT\tCMND\tHo ten\n";
+    cout << "-----------------------------\n";
+    KhachHang* cur = head;
+    while (cur) {
+        cout << cur->soThuTu << "\t" << cur->cmnd << "\t" << cur->hoTen << endl;
+        cur = cur->next;
+    }
+}
+
+// hien thi danh sach ve cua chuyen bay
+void hienThiVeCuaChuyenBay(ChuyenBay* cb) {
+    if (!cb) { cout << "Khong ton tai chuyen bay\n"; return; }
+    cout << "Danh sach ve tren chuyen " << cb->maChuyenBay << ":\n";
+    if (!cb->danhSachVe) { cout << "Chua co ve nao.\n"; return; }
+    cout << "MaVe\tCMND\tHoTen\tSoGhe\n";
+    Ve* cur = cb->danhSachVe;
+    while (cur) {
+        cout << cur->maVe << "\t" << cur->cmnd << "\t" << cur->hoTen << "\t" << cur->soGhe << endl;
+        cur = cur->next;
+    }
+}
+void hienThiGheConTrong(ChuyenBay* cb) {
+    if (!cb) { cout << "Khong ton tai chuyen bay\n"; return; }
+    cout << "Cac ghe con trong tren chuyen " << cb->maChuyenBay << ":\n";
+    NodeGhe* cur = cb->danhSachGheTrong;
+    if (!cur) { cout << "Khong con ghe trong.\n"; return; }
+    while (cur) { cout << cur->soGhe << " "; cur = cur->next; }
+    cout << endl;
+}
+
+// ------------------ CAP NHAT TRANG THAI ------------------
+void capNhatTrangThaiChuyenBay(ChuyenBay* cb) {
+    if (!cb) return;
+    if (cb->trangThai == 0 || cb->trangThai == 3) return;
+    int so = demGheTrong(cb->danhSachGheTrong);
+    cb->trangThai = (so == 0) ? 2 : 1;
+}
+
+// ------------------ DAT VE (nguoi dung) ------------------
+void datVe() {
+    xoaManHinh();
+    cout << "========== DAT VE (Them vao danh sach khach cho) ==========\n";
+    string maCB; cout << "Nhap ma chuyen bay: "; getline(cin, maCB); maCB = trim(maCB);
+    if (isBlank(maCB)) { cout << "Ma chuyen bay khong duoc de trong!\n"; return; }
+    ChuyenBay* cb = timChuyenBay(dsChuyenBay, maCB);
+    if (!cb) { cout << "Khong tim thay chuyen bay\n"; return; }
+    if (cb->trangThai != 1) { cout << "Chuyen bay hien khong cho dat/da hoan tat/het ve.\n"; return; }
+    string cmnd, hoten; cout << "Nhap CMND: "; getline(cin, cmnd); cmnd = trim(cmnd);
+    if (isBlank(cmnd)) { cout << "CMND khong duoc de trong!\n"; return; }
+    cout << "Nhap ho ten: "; getline(cin, hoten); hoten = trim(hoten);
+    if (isBlank(hoten)) { cout << "Ho ten khong duoc de trong!\n"; return; }
+    // them khach hang vao danh sach cho
+    themKhachHang(dsKhachHang, cmnd, hoten);
+    ghiFileKhachHang(dsKhachHang);
+    cout << "Khach hang da duoc them vao danh sach cho. STT: " << dsKhachHang->soThuTu << endl;
+    cout << "Luu thong tin trong KhachHang.txt\n";
+}
+
+// ------------------ XU LY DAT VE (Admin) ------------------
+void xuLyDatVe_Admin() {
+    xoaManHinh();
+    cout << "==== XU LY DAT VE ====\n";
+    if (!dsKhachHang) { cout << "Khong co khach hang nao!\n"; return; }
+    hienThiDanhSachKhachHang(dsKhachHang);
+    int stt; cout << "Nhap STT khach hang can xu ly (0 de huy): "; cin >> stt; cin.ignore();
+    if (stt == 0) return;
+    KhachHang* kh = timKhachHangTheoSTT(dsKhachHang, stt);
+    if (!kh) { cout << "Khong tim thay STT\n"; return; }
+    string maCB; cout << "Nhap ma chuyen bay cho khach: "; getline(cin, maCB); maCB = trim(maCB);
+    ChuyenBay* cb = timChuyenBay(dsChuyenBay, maCB);
+    if (!cb) { cout << "Khong tim chuyen bay\n"; return; }
+    if (cb->trangThai != 1) { cout << "Chuyen bay khong cho dat (da het ve/hoan tat/huy)\n"; return; }
+    cout << "Danh sach ghe con trong:\n"; hienThiGheConTrong(cb);
+    int soGhe; cout << "\nNhap so ghe cho khach: "; cin >> soGhe; cin.ignore();
+    // check seat available
+    if (!xoaGheTrong(cb->danhSachGheTrong, soGhe)) { cout << "So ghe khong hop le hoac da co nguoi dat.\n"; return; }
+    // tao ve
+    Ve* v = new Ve();
+    v->maVe = cb->maChuyenBay + "_" + to_string(soGhe);
+    v->maChuyenBay = cb->maChuyenBay;
+    v->cmnd = kh->cmnd;
+    v->hoTen = kh->hoTen;
+    v->soGhe = soGhe;
+    themVe(cb->danhSachVe, v);
+    capNhatTrangThaiChuyenBay(cb);
+    // xoa khach hang khoi ds cho
+    xoaKhachHang(dsKhachHang, stt);
+    ghiFileKhachHang(dsKhachHang);
+    // luu file ve
+    ghiFileVeRaFile(*v);
+    ghiFileChuyenBay(dsChuyenBay);
+    cout << "Xu ly dat ve thanh cong. Ma ve: " << v->maVe << endl;
+}
+
+// ------------------ XU LY TRA VE (Admin) ------------------
+void xuLyTraVe_Admin() {
+    xoaManHinh();
+    cout << "==== XU LY TRA VE ====\n";
+    string maVe; cout << "Nhap ma ve: "; getline(cin, maVe); maVe = trim(maVe);
+    if (isBlank(maVe)) { cout << "Ma ve khong duoc de trong\n"; return; }
+    // tim tren tat ca chuyen bay
+    NodeChuyenBay* cur = dsChuyenBay;
+    bool found = false;
+    while (cur) {
+        if (timVeTrongDS(cur->data.danhSachVe, maVe)) {
+            // check condition: chuyen bay chua hoan tat
+            if (cur->data.trangThai == 3) { cout << "Khong the tra ve: chuyen bay da hoan tat\n"; return; }
+            // lay thong tin ve de lay so ghe
+            Ve* v = timVeTrongDS(cur->data.danhSachVe, maVe);
+            int soGhe = v->soGhe;
+            // xoa ve khoi ds
+            if (!xoaVe(cur->data.danhSachVe, maVe)) { cout << "Xoa ve that bai\n"; return; }
+            // them ghe tro lai
+            themGheTrong(cur->data.danhSachGheTrong, soGhe);
+            capNhatTrangThaiChuyenBay(&(cur->data));
+            xoaFileVe(maVe);
+            ghiFileChuyenBay(dsChuyenBay);
+            cout << "Tra ve thanh cong\n";
+            found = true;
+            break;
+        }
+        cur = cur->next;
+    }
+    if (!found) cout << "Khong tim thay ma ve\n";
+}
+
+// ------------------ THONG KE ------------------
+void thongKe_DanhSachKhachTheoChuyenBay() {
+    xoaManHinh();
+    string maCB; cout << "Nhap ma chuyen bay: "; getline(cin, maCB); maCB = trim(maCB);
+    ChuyenBay* cb = timChuyenBay(dsChuyenBay, maCB);
+    if (!cb) { cout << "Khong tim thay chuyen bay\n"; return; }
+    hienThiVeCuaChuyenBay(cb);
+}
+void thongKe_GheConTrong() {
+    xoaManHinh();
+    string maCB; cout << "Nhap ma chuyen bay: "; getline(cin, maCB); maCB = trim(maCB);
+    ChuyenBay* cb = timChuyenBay(dsChuyenBay, maCB);
+    if (!cb) { cout << "Khong tim thay chuyen bay\n"; return; }
+    hienThiGheConTrong(cb);
+}
+void thongKe_SoLanThucHienChuyenBayCuaMayBay() {
+    xoaManHinh();
+    string soHieu; cout << "Nhap so hieu may bay: "; getline(cin, soHieu); soHieu = trim(soHieu);
+    if (isBlank(soHieu)) { cout << "Khong duoc de trong\n"; return; }
+    int count = 0;
+    NodeChuyenBay* cur = dsChuyenBay;
+    while (cur) {
+        if (cur->data.soHieuMayBay == soHieu) count++;
+        cur = cur->next;
+    }
+    cout << "May bay " << soHieu << " da thuc hien " << count << " chuyen.\n";
+}
+
+// ------------------ ADMIN LOGIN ------------------
+bool adminLogin() {
+    xoaManHinh();
+    setColor(14); cout << "********** DANG NHAP HE THONG **********\n"; setColor(7);
+    cout << "Nhap ESC de thoat.\n";
+    int tries = 0;
+    while (tries < 3) {
+        cout << "User: ";
+        string user; getline(cin, user);
+        if (!user.empty() && user[0] == 27) return false; // unlikely
+        cout << "Password: ";
+        // mask input
+        string pass = "";
+        char ch;
+        while (true) {
+            ch = _getch();
+            if (ch == 13) { // enter
+                cout << endl; break;
+            }
+            else if (ch == 27) { // ESC
+                cout << "\nThoat dang nhap.\n"; return false;
+            }
+            else if (ch == 8) { // backspace
+                if (!pass.empty()) {
+                    pass.pop_back();
+                    cout << "\b \b";
+                }
+            }
+            else {
+                pass.push_back(ch);
+                cout << "*";
+            }
+        }
+        if (checkAdmin(user, pass)) { cout << "Dang nhap thanh cong!\n"; return true; }
+        else { cout << "Sai user/password\n"; tries++; }
+    }
+    cout << "Da nhap sai 3 lan, thoat.\n";
+    return false;
+}
+
+// ------------------ MENU QUAN LY (Admin) ------------------
+void menuAdmin() {
+    if (!adminLogin()) return;
+    int lc;
+    do {
+        xoaManHinh();
+        setColor(11);
+        cout << "===== MENU QUAN LY =====\n";
+        setColor(7);
+        cout << "1. Xu ly dat ve\n2. Xu ly tra ve\n3. Thong ke\n0. Thoat\nLua chon: ";
+        cin >> lc; cin.ignore();
+        switch (lc) {
+        case 1: xuLyDatVe_Admin(); dungManHinh(); break;
+        case 2: xuLyTraVe_Admin(); dungManHinh(); break;
+        case 3: {
+            int s; xoaManHinh();
+            cout << "1. Hien thi danh sach khach cua 1 chuyen bay\n2. Hien thi danh sach ghe con trong\n3. Thong ke so lan thuc hien chuyen bay cua 1 may bay\nLua chon: ";
+            cin >> s; cin.ignore();
+            if (s == 1) thongKe_DanhSachKhachTheoChuyenBay();
+            else if (s == 2) thongKe_GheConTrong();
+            else if (s == 3) thongKe_SoLanThucHienChuyenBayCuaMayBay();
+            else cout << "Lua chon khong hop le\n";
+            dungManHinh();
+            break;
+        }
+        case 0: cout << "Thoat menu quan ly\n"; break;
+        default: cout << "Lua chon khong hop le\n"; dungManHinh();
+        }
+    } while (lc != 0);
+}
+
+// ------------------ THEM / HIEN THI / LUU ------------------
+void themMayBay_TuBan() {
+    xoaManHinh();
+    MayBay mb;
+    cout << "Nhap so hieu may bay: "; getline(cin, mb.soHieu); mb.soHieu = trim(mb.soHieu);
+    if (isBlank(mb.soHieu)) { cout << "Khong duoc de trong\n"; return; }
+    if (kiemTraMayBayTonTai(dsMayBay, mb.soHieu)) { cout << "May bay da ton tai\n"; return; }
+    cout << "Nhap so cho: "; string s; getline(cin, s); mb.soCho = stoi(s);
+    if (mb.soCho <= 0) { cout << "So cho phai > 0\n"; return; }
+    themMayBay(dsMayBay, mb);
+    ghiFileMayBay(dsMayBay);
+    cout << "Them may bay thanh cong\n";
+}
+void themChuyenBay_TuBan() {
+    xoaManHinh();
+    ChuyenBay cb;
+    cout << "Nhap ma chuyen bay: "; getline(cin, cb.maChuyenBay); cb.maChuyenBay = trim(cb.maChuyenBay);
+    if (isBlank(cb.maChuyenBay)) { cout << "Khong duoc de trong\n"; return; }
+    if (timChuyenBay(dsChuyenBay, cb.maChuyenBay)) { cout << "Ma chuyen bay da ton tai\n"; return; }
+    cout << "Nhap so hieu may bay: "; getline(cin, cb.soHieuMayBay); cb.soHieuMayBay = trim(cb.soHieuMayBay);
+    if (!kiemTraMayBayTonTai(dsMayBay, cb.soHieuMayBay)) { cout << "May bay khong ton tai\n"; return; }
+    cout << "Nhap ngay khoi hanh (dd/mm/yyyy): "; getline(cin, cb.ngayKhoiHanh); cb.ngayKhoiHanh = trim(cb.ngayKhoiHanh);
+    cout << "Nhap san bay den: "; getline(cin, cb.sanBayDen); cb.sanBayDen = trim(cb.sanBayDen);
+    cb.trangThai = 1;
+    // tao danh sach ghe tu may bay
+    MayBay* mb = timMayBay(dsMayBay, cb.soHieuMayBay);
+    if (mb) cb.danhSachGheTrong = khoiTaoDanhSachGhe(mb->soCho);
+    themChuyenBay(dsChuyenBay, cb);
+    ghiFileChuyenBay(dsChuyenBay);
+    cout << "Them chuyen bay thanh cong\n";
+}
+
+// ------------------ CLEANUP ------------------
+void giaiPhongDanhSachMayBay(NodeMayBay*& head) {
+    while (head) { NodeMayBay* t = head; head = head->next; delete t; }
+}
+void giaiPhongDanhSachChuyenBay(NodeChuyenBay*& head) {
+    while (head) {
+        giaiPhongDanhSachGhe(head->data.danhSachGheTrong);
+        // free ve list
+        Ve* v = head->data.danhSachVe;
+        while (v) { Ve* t = v; v = v->next; delete t; }
+        NodeChuyenBay* t = head; head = head->next; delete t;
+    }
+}
+void giaiPhongDanhSachKhachHang(KhachHang*& head) {
+    while (head) { KhachHang* t = head; head = head->next; delete t; }
+}
+
+// ------------------ MAIN ------------------
+int main() {
+    // load data
+    docFileMayBay(dsMayBay);
+    docFileChuyenBay(dsChuyenBay);
+    hienThiDanhSachChuyenBay(dsChuyenBay);
+    docFileKhachHang(dsKhachHang);
+
+    int ch;
+    do {
+        xoaManHinh();
+        setColor(10);
+        cout << "********** QUAN LY CHUYEN BAY NOI DIA - PROJECT 5 **********\n";
+        setColor(7);
+        cout << "1. Hien thi danh sach may bay\n";
+        cout << "2. Hien thi danh sach chuyen bay\n";
+        cout << "3. Dat ve (them khach hang vao danh sach cho)\n";
+        cout << "4. Quan ly (dang nhap)\n";
+        cout << "5. Them may bay moi\n";
+        cout << "6. Them chuyen bay moi\n";
+        cout << "0. Thoat va luu\n";
+        cout << "Lua chon: ";
+        if (!(cin >> ch)) { cin.clear(); string dummy; getline(cin, dummy); ch = -1; }
+        cin.ignore();
+        switch (ch) {
+        case 1: hienThiDanhSachMayBay(dsMayBay); dungManHinh(); break;
+        case 2: hienThiDanhSachChuyenBay(dsChuyenBay); dungManHinh(); break;
+        case 3: datVe(); dungManHinh(); break;
+        case 4: menuAdmin(); break;
+        case 5: themMayBay_TuBan(); dungManHinh(); break;
+        case 6: themChuyenBay_TuBan(); dungManHinh(); break;
+        case 0:
+            ghiFileMayBay(dsMayBay);
+            ghiFileChuyenBay(dsChuyenBay);
+            ghiFileKhachHang(dsKhachHang);
+            cout << "Da luu du lieu. Tam biet!\n";
+            break;
+        default: cout << "Lua chon khong hop le\n"; dungManHinh();
+        }
+    } while (ch != 0);
+
+    // cleanup
+    giaiPhongDanhSachMayBay(dsMayBay);
+    giaiPhongDanhSachChuyenBay(dsChuyenBay);
+    giaiPhongDanhSachKhachHang(dsKhachHang);
+    return 0;
+}
