@@ -1,0 +1,5 @@
+Ma ve: CB001_22
+Ma chuyen bay: CB001
+CMND: 23415151
+Ho ten: pham thai tung
+So ghe: 22
